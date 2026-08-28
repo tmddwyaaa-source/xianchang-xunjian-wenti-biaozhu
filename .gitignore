@@ -6,7 +6,6 @@ backend/data/*.db-journal
 backend/*.exe
 backend/*.exe~
 *.exe~
-密码.md
 mobile/Library/
 mobile/Temp/
 mobile/Logs/
