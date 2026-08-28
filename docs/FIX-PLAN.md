@@ -6,6 +6,201 @@
 
 ---
 
+## Phase 10（已归档）— Unity 完整登录会话：切换账号、退出、改密、Token 过期
+
+磁盘核对（M1 斥候 2026-08-29）：
+
+手机端**不是没有登录接口**，而是登录后无法切换：
+
+| 现状 | 影响 |
+|------|------|
+| `BuildLoginOverlay` 用户名默认填 `inspector` | 看起来像「只能用默认账号」 |
+| `inspect.jwt` 写入 PlayerPrefs 后一直有效 | 二次打开直接进主界面，没有退出入口 |
+| 顶栏 `m_UserNameText` 只是左对齐 Text | 点不了，没有下拉 |
+| 无「退出登录」 | Token 清不掉，换不了人 |
+| 后端无改密接口 | 下拉里的「修改密码」无处可调 |
+| 登录遮罩 `GlassMaxA=0.55` 且卡片占 0.22～0.82 | 挡住大半摄像头 |
+
+JWT 24h、`AttachAuth`、`HandleUnauthorized`（401 清 Token）已经有。本环补齐 **会话 UI + 改密 API**，不要重写扫描/锚点。
+
+本环开 **M5 + M6**。不要改 `admin/`。不要执行 `InspectAR/Setup Project`。
+
+| 模块 | 本环 | 职责 |
+|------|------|------|
+| M1 | 进行中 | 本文 / API / Registry、查收、同步 inspect-ar |
+| M5 | done | `POST /api/auth/password` |
+| M6 | done | 登录卡、右上角用户菜单、退出、改密、过期跳转 |
+
+本任务按循环渐进执行：
+- 每环只做一个目标，必须有成功标准、证据、存档点
+- 环内角色：斥候 → 主力 → 搜剿；fail 则主力↔搜剿
+- 同一卡点签名最多 4 次；第 4 次仍 fail 必须硬停并写卡点升级报告
+- 未升级前禁止继续对同一卡点盲改
+
+---
+
+### 卡点 Q — 改密接口（仅 M5，`backend/`）
+
+只改 `backend/`。已有 `auth.HashPassword` / `auth.CheckPassword`、`GetUserByUsername`。登录路由保持公开。
+
+#### 环 #1 — `POST /api/auth/password`
+
+1. `store`：`GetUserByID(id)`、`UpdatePassword(id, hash)`（`UPDATE users SET password=? WHERE id=?`）。不要重建表。
+2. 路由：`POST /api/auth/password`，走现有 `requireAuth`（必须 Bearer）。
+3. Body：`{ "oldPassword": "...", "newPassword": "..." }`（字段名固定，不要 `old`/`new`）。
+4. 规则：
+   - 缺字段 / 空 → **400**
+   - `newPassword` 去空白后长度 &lt; **6** → **400** `{ "error": "password too short" }`
+   - 新密码与旧密码相同 → **400** `{ "error": "password unchanged" }`
+   - 旧密码不对 → **400** `{ "error": "invalid old password" }`（**不要 401**，避免 Unity 当成 Token 过期并登出）
+   - 用户 id 对不上库 → **401** `unauthorized`
+   - 成功 → **200** `{ "ok": true }`，当前 JWT **继续有效**（不必强制重登）
+5. 成功后 bcrypt 覆盖 `users.password`。任意已登录角色可改**自己的**密码，不能改别人的。
+
+**自测（必须改回种子，避免弄坏 `密码.md`）**：
+
+```bat
+curl -s -X POST http://127.0.0.1:8080/api/auth/login -H "Content-Type: application/json" -d "{\"username\":\"inspector\",\"password\":\"inspect123\"}"
+curl -s -o NUL -w "%%{http_code}" -X POST http://127.0.0.1:8080/api/auth/password -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d "{\"oldPassword\":\"inspect123\",\"newPassword\":\"inspect456\"}"
+curl -s -X POST http://127.0.0.1:8080/api/auth/login -H "Content-Type: application/json" -d "{\"username\":\"inspector\",\"password\":\"inspect456\"}"
+curl -s -X POST http://127.0.0.1:8080/api/auth/password -H "Authorization: Bearer <新token>" -H "Content-Type: application/json" -d "{\"oldPassword\":\"inspect456\",\"newPassword\":\"inspect123\"}"
+```
+
+再测：无 Token → 401；旧密码错 → 400 且文案 `invalid old password`。贴真实输出。
+
+**成功标准**：上述 curl 矩阵通过；种子账号测完已改回 `inspect123`。
+
+---
+
+### 卡点 R — Unity 登录会话（仅 M6，`mobile/`）
+
+禁止 Setup Project。源码 `测试考题/mobile`。允许改：`InspectARApp.cs`、`InspectUiTheme.cs`，**建议新建** `Assets/InspectAR/Scripts/InspectAuthSession.cs`（状态管理，避免 App 再膨胀）。不要改扫描/锚点/点云逻辑。
+
+保留：`PlayerPrefs` 键 `inspect.jwt` / `inspect.userId` / `inspect.role` / `inspect.username` / `inspect.backendBaseUrl`；`AttachAuth`；401 → 清 Token。`ColorTint`。挡 AR 的面板 `Image.a ≤ 0.55`。
+
+#### 环 #1 — 登录状态脚本 + Token 过期
+
+`InspectAuthSession`（或同等静态/实例，挂在现有 App 上即可）：
+
+| 方法 | 行为 |
+|------|------|
+| `HasToken` | `inspect.jwt` 非空 |
+| `LoadJwt` / `UserName` / `Role` / `UserId` | 读 PlayerPrefs |
+| `SaveLogin(token, id, username, role)` | 写入并 Save |
+| `Clear()` | 删除 jwt/userId/role/username（**不要**删后端 URL） |
+| `AttachAuth(UnityWebRequest)` | `Authorization: Bearer …` |
+| `IsExpired()` | Base64 解 JWT **payload** 读 `exp`（Unix 秒）。解析失败当作未过期，交给服务端 401 |
+| `EnsureFresh()` | 有 Token 且 `IsExpired()` → `Clear()` 返回 false |
+
+`Start` / 每次主界面刷新：`EnsureFresh()` 失败则显示登录卡 + Toast「登录已过期，请重新登录。」  
+所有 `GET/POST/PUT` 继续 `AttachAuth`；HTTP **401** 走现有 `HandleUnauthorized`（清 Token、关历史/抽屉、`ApplySessionUi`、同一句 Toast）。  
+**禁止**启动时自动用 inspector 静默登录。
+
+#### 环 #2 — 登录界面（居中半透明卡，摄像头可见）
+
+重做 `BuildLoginOverlay`，不要全屏不透明罩：
+
+| 物体 | 锚点 / 尺寸 | 样式 |
+|------|-------------|------|
+| `LoginOverlay` | stretch 全屏 | `Image` 色 `BgCoolGray`，**a = 0.18**（只略压暗，必须能看见摄像头）。`raycastTarget = true`（登录时不要点到 AR） |
+| `LoginCard` | pivot 0.5,0.5；anchorMin=Max=0.5,0.5；`sizeDelta = (640, 760)` 竖屏 | `CreateCard`，底 `WithAlpha(BgWarmGray, GlassPanelA=0.50)`，圆角已有 |
+| 标题 | 「巡检登录」 | 细体/常规，`OnSecondary` |
+| 后端地址 | InputField | 预填 `LoadBackendUrl()` |
+| 用户名 | InputField | **text 留空**（或仅预填上次 `inspect.username`，禁止写死 `inspector`）placeholder「用户名」 |
+| 密码 | `ContentType.Password` | 每次打开 **清空** |
+| 登录按钮 | Primary | `OnLoginClicked` |
+| 状态行 | | 可写「演示：inspector / inspect123」，不要自动填进输入框 |
+
+登录卡必须在画面**正中**，左右留白 ≥8%，上下能看到摄像头。横屏时 `sizeDelta` 可改为 `(720, 560)` 或按 `Screen.width>height` 分支，不要拉满。
+
+成功：`SaveLogin` → `ApplySessionUi`（隐藏登录卡、显示顶栏底栏）。失败：卡留着，Toast 失败原因。
+
+#### 环 #3 — 右上角用户芯片 + 下拉 + 改密 + 退出
+
+顶栏改布局（用户信息**右上角小尺寸**）：
+
+| 物体 | 位置 |
+|------|------|
+| `TaskState` | 左：anchor (0, 0.48)–(0.62, 1) |
+| `UserChip` | **右**：anchor (0.62, 0.48)–(1, 1)，高度吃顶栏上半；字号 **20**，`TextAnchor.MiddleRight` |
+| `FeatureHint` | 仍占顶栏下半全宽 |
+
+`UserChip` 必须是 **Button**（不是纯 Text），显示当前 `username`（没有则 role）。点击切换 `UserMenu`：
+
+```
+TopBar
+  UserChip（右上，小）
+UserMenu（登录后才存在；默认隐藏）
+  修改密码     ← Secondary
+  退出登录     ← Danger
+```
+
+`UserMenu` 预设：
+
+- 父节点 Canvas，anchorMin=Max `(1,1)`，pivot `(1,1)`，`anchoredPosition` 约 `(-16, -顶栏高度-8)`
+- `sizeDelta` 约 `(280, 140)`
+- 底 `WithAlpha(BgWarmGray, 0.50)`，圆角，**不要**盖住中央 AR
+- 点芯片外：点空白或再点芯片则关闭菜单
+- 未登录不显示芯片和菜单
+
+**退出登录**：`InspectAuthSession.Clear()` → 暂停扫描、关抽屉/历史/确认框 → `ApplySessionUi`（出登录卡）→ Toast「已退出登录」。密码框保持空，便于换账号。
+
+**修改密码**弹层（`PasswordOverlay`，结构对齐登录卡，更矮）：
+
+| 物体 | |
+|------|--|
+| 遮罩 | 全屏 a=0.18，挡点击 |
+| 卡 | 居中 `sizeDelta (640, 640)`，a=0.50 |
+| 旧密码 / 新密码 / 确认新密码 | 三个 Password InputField |
+| 保存 | Primary → `POST {base}/api/auth/password`，Header `Authorization: Bearer {jwt}`，JSON `oldPassword`/`newPassword` |
+| 取消 | Secondary，关层不清 Token |
+
+调用约定：
+
+- 确认与新密码不一致 → 本地 Toast，不发请求
+- 成功 200 → 关层、Toast「密码已修改」，**保持登录**
+- 400 `invalid old password` → Toast「原密码不正确」，**不要**登出
+- 401 → `HandleUnauthorized`（Token 真过期）
+- 网络失败 → Toast 失败，保持登录
+
+**成功标准（代码）**：无 Token / 过期 / 退出 → 必见登录卡；登录卡不写死 inspector；右上角可点用户名；退出后可换账号再登；改密走新接口且错旧密码不踢登录。禁止打开游戏 / 出包。
+
+---
+
+### 子窗口开工话术（Phase 10，复制到新 Cursor 窗口）
+
+工作区：`D:\Cursor_projectt\测试考题`
+
+**M5 — 改密接口（可与 M6 同时开）**
+
+```text
+@multi-window_M
+我是 M5 窗口。请读 D:\Cursor_projectt\测试考题\docs\MODULE-REGISTRY.md 中 M5 章节，以及 docs/FIX-PLAN.md Phase 10 卡点 Q、docs/API.md 改密段。
+按斥候 → 主力 → 搜剿执行；同一卡点最多 4 次。
+只改 backend/。本环唯一目标：POST /api/auth/password（requireAuth）。
+旧密码错误必须 400 invalid old password，禁止 401。
+自测完必须把 inspector 密码改回 inspect123。
+不要打开游戏。不要改 admin/ 或 mobile/。
+不要自己把 Registry 标成 done。
+完成后说：M5 已完成，请主导窗口查收。
+```
+
+**M6 — Unity 登录会话**
+
+```text
+@multi-window_M
+我是 M6 窗口。请读 D:\Cursor_projectt\测试考题\docs\MODULE-REGISTRY.md 中 M6 章节，以及 docs/FIX-PLAN.md Phase 10 卡点 R、docs/API.md。
+按斥候 → 主力 → 搜剿执行；同一卡点最多 4 次。
+只改 mobile/。不要执行 InspectAR/Setup Project。不要打开游戏。
+本环：InspectAuthSession（Token 存取与 exp）；居中半透明登录卡（摄像头可见，用户名不要写死 inspector）；右上角用户芯片下拉（修改密码 / 退出登录）；401 与 exp 过期回登录并 Toast。
+改密请求：POST /api/auth/password，Body oldPassword/newPassword，带 Bearer。
+保留扫描、世界锚、点云、临时平面、ColorTint。
+不要自己把 Registry 标成 done。
+完成后说：M6 已完成，请主导窗口查收。
+```
+
+---
+
 ## Phase 9（已归档）— 工地白墙白地：敏感检测 + 特征点云 + 临时虚拟平面
 
 磁盘核对（M1 斥候 2026-08-28）：

@@ -46,6 +46,7 @@ public sealed class InspectARApp : MonoBehaviour
     const float IssuePollStartDelay = 1f;
     const float ToastSeconds = 2.5f;
     const float ToastFadeSeconds = 0.35f;
+    const float LoginDimA = 0.18f;
     const float FloorLockSeconds = 1f;
     const string SystemHint = "【系统提示】请尽快安排处理";
     static readonly string[] TitleKeywords = { "漏水", "裂缝", "冒烟", "异响", "脱落" };
@@ -76,10 +77,22 @@ public sealed class InspectARApp : MonoBehaviour
 
     InspectUiTheme m_Theme;
     InspectHistoryPanel m_History;
+    readonly InspectAuthSession m_Auth = new InspectAuthSession();
 
     Canvas m_Canvas;
     CanvasScaler m_Scaler;
     GameObject m_LoginPanel;
+    RectTransform m_LoginCardRt;
+    GameObject m_PasswordPanel;
+    RectTransform m_PasswordCardRt;
+    GameObject m_UserMenu;
+    RectTransform m_UserMenuRt;
+    Button m_UserChipButton;
+    Text m_UserChipLabel;
+    InputField m_OldPassField;
+    InputField m_NewPassField;
+    InputField m_ConfirmPassField;
+    bool m_ChangingPassword;
     GameObject m_Hud;
     GameObject m_BottomBar;
     GameObject m_Drawer;
@@ -99,7 +112,6 @@ public sealed class InspectARApp : MonoBehaviour
     Text m_StartScanLabel;
     Text m_PauseScanLabel;
     Text m_MarkerToggleLabel;
-    Text m_UserNameText;
     Text m_TaskStateText;
     Text m_LoginStatusText;
     Text m_ConfirmSummary;
@@ -126,8 +138,8 @@ public sealed class InspectARApp : MonoBehaviour
     static readonly List<ARRaycastHit> s_Hits = new List<ARRaycastHit>();
     static readonly List<RaycastResult> s_UiHits = new List<RaycastResult>();
 
-    public string UserId => PlayerPrefs.GetString(PlayerPrefsUserIdKey, "");
-    public string UserRole => PlayerPrefs.GetString(PlayerPrefsRoleKey, "");
+    public string UserId => m_Auth.UserId;
+    public string UserRole => m_Auth.Role;
 
     void Start()
     {
@@ -152,8 +164,15 @@ public sealed class InspectARApp : MonoBehaviour
         EnsureEventSystem();
         BuildUi();
         ApplyLayout();
+        var hadToken = m_Auth.HasToken;
+        var expired = hadToken && m_Auth.IsExpired();
         ApplySessionUi();
-        SetStatus(HasJwt() ? "点「新建任务」后才能扫描放置。" : "请先登录。", false);
+        if (expired)
+            SetStatus("登录已过期，请重新登录。", true);
+        else if (!m_Auth.HasToken)
+            SetStatus("请先登录。", false);
+        else
+            SetStatus("点「新建任务」后才能扫描放置。", false);
         StartCoroutine(PollIssuesLoop());
     }
 
@@ -269,6 +288,8 @@ public sealed class InspectARApp : MonoBehaviour
         }
         if (!TryGetPress(out var screenPos))
             return;
+        if (DismissUserMenuIfOutside(screenPos))
+            return;
         TryPlaceFromPress(screenPos);
     }
 
@@ -277,6 +298,8 @@ public sealed class InspectARApp : MonoBehaviour
         if (m_Placing)
             return;
         if (m_LoginPanel != null && m_LoginPanel.activeSelf)
+            return;
+        if (m_PasswordPanel != null && m_PasswordPanel.activeSelf)
             return;
         if (m_ConfirmPanel != null && m_ConfirmPanel.activeSelf)
             return;
@@ -947,6 +970,8 @@ public sealed class InspectARApp : MonoBehaviour
         BuildMarkerDrawer(root);
         BuildConfirmOverlay(root);
         BuildLoginOverlay(root);
+        BuildUserMenu(root);
+        BuildPasswordOverlay(root);
         m_History = new InspectHistoryPanel(m_Theme, this, root);
         RefreshScanButtons();
     }
@@ -958,12 +983,31 @@ public sealed class InspectARApp : MonoBehaviour
         var inner = new GameObject("TopInner", typeof(RectTransform));
         inner.transform.SetParent(m_Hud.transform, false);
         InspectUiTheme.StretchFull(inner.GetComponent<RectTransform>());
-        m_UserNameText = m_Theme.CreateAnchoredText(inner.transform, "UserName", "",
-            new Vector2(0f, 0.48f), new Vector2(0.55f, 1f), 22, m_Theme.OnSecondary, TextAnchor.MiddleLeft);
         m_TaskStateText = m_Theme.CreateAnchoredText(inner.transform, "TaskState", "未建任务",
-            new Vector2(0.55f, 0.48f), new Vector2(1f, 1f), 22, m_Theme.OnSecondary, TextAnchor.MiddleRight);
+            new Vector2(0f, 0.48f), new Vector2(0.62f, 1f), 22, m_Theme.OnSecondary, TextAnchor.MiddleLeft);
+        m_UserChipButton = BuildUserChip(inner.transform);
         m_FeatureHintText = m_Theme.CreateAnchoredText(inner.transform, "FeatureHint", "",
             new Vector2(0f, 0f), new Vector2(1f, 0.52f), 18, m_Theme.OnSecondary, TextAnchor.MiddleLeft);
+    }
+
+    Button BuildUserChip(Transform parent)
+    {
+        var go = new GameObject("UserChip", typeof(RectTransform), typeof(Image), typeof(Button));
+        go.transform.SetParent(parent, false);
+        var rt = go.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.62f, 0.48f);
+        rt.anchorMax = new Vector2(1f, 1f);
+        rt.offsetMin = new Vector2(4f, 2f);
+        rt.offsetMax = new Vector2(-4f, -2f);
+        var img = go.GetComponent<Image>();
+        m_Theme.StyleGlass(img, m_Theme.BgWarmGray, InspectUiTheme.GlassWarmA, true);
+        var btn = go.GetComponent<Button>();
+        InspectUiTheme.StyleColorTint(btn);
+        m_UserChipLabel = m_Theme.AddButtonLabel(go.transform, "", 20);
+        m_UserChipLabel.alignment = TextAnchor.MiddleRight;
+        m_UserChipLabel.color = m_Theme.OnSecondary;
+        btn.onClick.AddListener(OnUserChipClicked);
+        return btn;
     }
 
     void BuildBottomBar(Transform canvas)
@@ -1148,6 +1192,19 @@ public sealed class InspectARApp : MonoBehaviour
 
         PadInner(m_Hud, topPx, 0f);
         PadInner(m_BottomBar, 0f, botPx);
+        if (m_LoginCardRt != null)
+            m_LoginCardRt.sizeDelta = landscape ? new Vector2(720f, 560f) : new Vector2(640f, 760f);
+        if (m_PasswordCardRt != null)
+            m_PasswordCardRt.sizeDelta = landscape ? new Vector2(720f, 560f) : new Vector2(640f, 640f);
+        LayoutUserMenu();
+    }
+
+    void LayoutUserMenu()
+    {
+        if (m_UserMenuRt == null)
+            return;
+        var topH = m_TopBarRt != null ? Mathf.Max(72f, m_TopBarRt.rect.height) : 88f;
+        m_UserMenuRt.anchoredPosition = new Vector2(-16f, -topH - 8f);
     }
 
     static void SetRect(RectTransform rt, float minX, float minY, float maxX, float maxY, Vector2 offsetMin, Vector2 offsetMax)
@@ -1181,6 +1238,7 @@ public sealed class InspectARApp : MonoBehaviour
             return;
         }
 
+        SetUserMenuOpen(false);
         m_History.Show();
     }
 
@@ -1199,6 +1257,7 @@ public sealed class InspectARApp : MonoBehaviour
             return;
         }
 
+        SetUserMenuOpen(false);
         m_DrawerOpen = !m_DrawerOpen;
         ApplyTaskUi();
     }
@@ -1262,23 +1321,68 @@ public sealed class InspectARApp : MonoBehaviour
         m_LoginPanel.transform.SetParent(canvas, false);
         InspectUiTheme.StretchFull(m_LoginPanel.GetComponent<RectTransform>());
         var dim = m_LoginPanel.GetComponent<Image>();
-        m_Theme.StyleDim(dim, m_Theme.BgCoolGray, InspectUiTheme.GlassMaxA);
+        m_Theme.StyleDim(dim, m_Theme.BgCoolGray, LoginDimA);
         var card = m_Theme.CreateCard(m_LoginPanel.transform, "LoginCard", InspectUiTheme.WithAlpha(m_Theme.BgWarmGray, InspectUiTheme.GlassPanelA));
-        var cardRt = card.GetComponent<RectTransform>();
-        cardRt.anchorMin = new Vector2(0.08f, 0.22f);
-        cardRt.anchorMax = new Vector2(0.92f, 0.82f);
-        cardRt.offsetMin = Vector2.zero;
-        cardRt.offsetMax = Vector2.zero;
+        m_LoginCardRt = card.GetComponent<RectTransform>();
+        m_LoginCardRt.anchorMin = new Vector2(0.5f, 0.5f);
+        m_LoginCardRt.anchorMax = new Vector2(0.5f, 0.5f);
+        m_LoginCardRt.pivot = new Vector2(0.5f, 0.5f);
+        m_LoginCardRt.sizeDelta = new Vector2(640f, 760f);
         var y = -20f;
         m_Theme.CreateLabel(card.transform, "巡检登录", ref y, 32, m_Theme.OnSecondary);
         m_LoginUrlField = m_Theme.CreateInput(card.transform, "后端地址 http://电脑局域网IP:8080", LoadBackendUrl(), ref y);
-        m_UserField = m_Theme.CreateInput(card.transform, "用户名", "inspector", ref y);
+        m_UserField = m_Theme.CreateInput(card.transform, "用户名", "", ref y);
         m_PassField = m_Theme.CreateInput(card.transform, "密码", "", ref y);
         m_PassField.contentType = InputField.ContentType.Password;
         m_PassField.text = "";
         var login = m_Theme.CreatePrimary(card.transform, "登录", ref y);
         login.onClick.AddListener(OnLoginClicked);
-        m_LoginStatusText = m_Theme.CreateLabel(card.transform, "请使用 inspector / inspect123。", ref y, 22, m_Theme.OnSecondary);
+        m_LoginStatusText = m_Theme.CreateLabel(card.transform, "演示：inspector / inspect123", ref y, 22, m_Theme.OnSecondary);
+    }
+
+    void BuildUserMenu(Transform canvas)
+    {
+        m_UserMenu = m_Theme.CreateCard(canvas, "UserMenu", InspectUiTheme.WithAlpha(m_Theme.BgWarmGray, 0.50f));
+        m_UserMenuRt = m_UserMenu.GetComponent<RectTransform>();
+        m_UserMenuRt.anchorMin = Vector2.one;
+        m_UserMenuRt.anchorMax = Vector2.one;
+        m_UserMenuRt.pivot = Vector2.one;
+        m_UserMenuRt.sizeDelta = new Vector2(280f, 168f);
+        m_UserMenuRt.anchoredPosition = new Vector2(-16f, -88f);
+        var y = -10f;
+        var change = m_Theme.CreateSecondary(m_UserMenu.transform, "修改密码", ref y);
+        change.onClick.AddListener(OnChangePasswordClicked);
+        var logout = m_Theme.CreateDanger(m_UserMenu.transform, "退出登录", ref y);
+        logout.onClick.AddListener(OnLogoutClicked);
+        m_UserMenu.SetActive(false);
+    }
+
+    void BuildPasswordOverlay(Transform canvas)
+    {
+        m_PasswordPanel = new GameObject("PasswordOverlay", typeof(RectTransform), typeof(Image));
+        m_PasswordPanel.transform.SetParent(canvas, false);
+        InspectUiTheme.StretchFull(m_PasswordPanel.GetComponent<RectTransform>());
+        var dim = m_PasswordPanel.GetComponent<Image>();
+        m_Theme.StyleDim(dim, m_Theme.BgCoolGray, LoginDimA);
+        var card = m_Theme.CreateCard(m_PasswordPanel.transform, "PasswordCard", InspectUiTheme.WithAlpha(m_Theme.BgWarmGray, InspectUiTheme.GlassPanelA));
+        m_PasswordCardRt = card.GetComponent<RectTransform>();
+        m_PasswordCardRt.anchorMin = new Vector2(0.5f, 0.5f);
+        m_PasswordCardRt.anchorMax = new Vector2(0.5f, 0.5f);
+        m_PasswordCardRt.pivot = new Vector2(0.5f, 0.5f);
+        m_PasswordCardRt.sizeDelta = new Vector2(640f, 640f);
+        var y = -20f;
+        m_Theme.CreateLabel(card.transform, "修改密码", ref y, 32, m_Theme.OnSecondary);
+        m_OldPassField = m_Theme.CreateInput(card.transform, "原密码", "", ref y);
+        m_OldPassField.contentType = InputField.ContentType.Password;
+        m_NewPassField = m_Theme.CreateInput(card.transform, "新密码", "", ref y);
+        m_NewPassField.contentType = InputField.ContentType.Password;
+        m_ConfirmPassField = m_Theme.CreateInput(card.transform, "确认新密码", "", ref y);
+        m_ConfirmPassField.contentType = InputField.ContentType.Password;
+        var save = m_Theme.CreatePrimary(card.transform, "保存", ref y);
+        save.onClick.AddListener(OnPasswordSaveClicked);
+        var cancel = m_Theme.CreateSecondary(card.transform, "取消", ref y);
+        cancel.onClick.AddListener(() => ShowPasswordOverlay(false));
+        ShowPasswordOverlay(false);
     }
 
     void ShowSubmitConfirm(bool show)
@@ -1330,15 +1434,20 @@ public sealed class InspectARApp : MonoBehaviour
 
     void ApplySessionUi()
     {
-        var loggedIn = HasJwt();
+        m_Auth.EnsureFresh();
+        var loggedIn = m_Auth.HasToken;
         if (m_LoginPanel != null)
             m_LoginPanel.SetActive(!loggedIn);
         if (m_Hud != null)
             m_Hud.SetActive(loggedIn);
         if (m_BottomBar != null)
             m_BottomBar.SetActive(loggedIn);
+        if (m_UserChipButton != null)
+            m_UserChipButton.gameObject.SetActive(loggedIn);
         if (!loggedIn)
         {
+            SetUserMenuOpen(false);
+            ShowPasswordOverlay(false);
             SetScanning(false);
             ShowSubmitConfirm(false);
             m_DrawerOpen = false;
@@ -1346,9 +1455,163 @@ public sealed class InspectARApp : MonoBehaviour
                 m_Drawer.SetActive(false);
             if (m_History != null && m_History.IsOpen)
                 m_History.Hide();
+            PrepareLoginFields();
+            if (m_LoginPanel != null)
+                m_LoginPanel.transform.SetAsLastSibling();
         }
 
         ApplyTaskUi();
+    }
+
+    void PrepareLoginFields()
+    {
+        if (m_PassField != null)
+            m_PassField.text = "";
+        if (m_UserField != null && m_UserField.text == "inspector")
+            m_UserField.text = "";
+    }
+
+    void OnUserChipClicked()
+    {
+        if (!m_Auth.HasToken)
+            return;
+        SetUserMenuOpen(m_UserMenu == null || !m_UserMenu.activeSelf);
+    }
+
+    void SetUserMenuOpen(bool open)
+    {
+        if (m_UserMenu == null)
+            return;
+        m_UserMenu.SetActive(open && m_Auth.HasToken);
+        if (open && m_Auth.HasToken)
+        {
+            LayoutUserMenu();
+            m_UserMenu.transform.SetAsLastSibling();
+        }
+    }
+
+    bool DismissUserMenuIfOutside(Vector2 screenPos)
+    {
+        if (m_UserMenu == null || !m_UserMenu.activeSelf)
+            return false;
+        if (IsScreenOver(m_UserMenuRt, screenPos))
+            return false;
+        if (m_UserChipButton != null && IsScreenOver(m_UserChipButton.GetComponent<RectTransform>(), screenPos))
+            return false;
+        SetUserMenuOpen(false);
+        return true;
+    }
+
+    bool IsScreenOver(RectTransform rt, Vector2 screenPos)
+    {
+        if (rt == null || !rt.gameObject.activeInHierarchy)
+            return false;
+        var cam = m_Canvas != null ? m_Canvas.worldCamera : null;
+        return RectTransformUtility.RectangleContainsScreenPoint(rt, screenPos, cam);
+    }
+
+    void OnLogoutClicked()
+    {
+        SetUserMenuOpen(false);
+        ShowPasswordOverlay(false);
+        if (m_Scanning)
+            SetScanning(false);
+        m_DrawerOpen = false;
+        if (m_History != null && m_History.IsOpen)
+            m_History.Hide();
+        ShowSubmitConfirm(false);
+        m_Auth.Clear();
+        if (m_UserField != null)
+            m_UserField.text = "";
+        if (m_PassField != null)
+            m_PassField.text = "";
+        ApplySessionUi();
+        SetStatus("已退出登录。", false);
+    }
+
+    void OnChangePasswordClicked()
+    {
+        SetUserMenuOpen(false);
+        ShowPasswordOverlay(true);
+    }
+
+    void ShowPasswordOverlay(bool show)
+    {
+        if (m_PasswordPanel == null)
+            return;
+        m_PasswordPanel.SetActive(show);
+        if (!show)
+            return;
+        if (m_OldPassField != null)
+            m_OldPassField.text = "";
+        if (m_NewPassField != null)
+            m_NewPassField.text = "";
+        if (m_ConfirmPassField != null)
+            m_ConfirmPassField.text = "";
+        m_PasswordPanel.transform.SetAsLastSibling();
+    }
+
+    void OnPasswordSaveClicked()
+    {
+        if (m_ChangingPassword)
+            return;
+        var oldP = m_OldPassField != null ? m_OldPassField.text : "";
+        var newP = m_NewPassField != null ? m_NewPassField.text : "";
+        var confirm = m_ConfirmPassField != null ? m_ConfirmPassField.text : "";
+        if (newP != confirm)
+        {
+            SetStatus("两次新密码不一致。", true);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(oldP) || string.IsNullOrEmpty(newP))
+        {
+            SetStatus("请填写原密码和新密码。", true);
+            return;
+        }
+
+        StartCoroutine(PostChangePassword(oldP, newP));
+    }
+
+    IEnumerator PostChangePassword(string oldPassword, string newPassword)
+    {
+        m_ChangingPassword = true;
+        var json = JsonUtility.ToJson(new InspectPasswordRequest { oldPassword = oldPassword, newPassword = newPassword });
+        using (var req = new UnityWebRequest(CurrentBaseUrl() + "/api/auth/password", UnityWebRequest.kHttpVerbPOST))
+        {
+            req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            req.downloadHandler = new DownloadHandlerBuffer();
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.timeout = 15;
+            AttachAuth(req);
+            yield return req.SendWebRequest();
+            if (req.responseCode == 401)
+            {
+                HandleUnauthorized();
+                m_ChangingPassword = false;
+                yield break;
+            }
+
+            if (req.result == UnityWebRequest.Result.Success && req.responseCode == 200)
+            {
+                ShowPasswordOverlay(false);
+                SetStatus("密码已修改", false);
+            }
+            else if (req.responseCode == 400)
+            {
+                var err = TryReadError(req.downloadHandler != null ? req.downloadHandler.text : "");
+                if (err == "invalid old password")
+                    SetStatus("原密码不正确", true);
+                else
+                    SetStatus("修改失败：" + (string.IsNullOrEmpty(err) ? "400" : err), true);
+            }
+            else if (req.result != UnityWebRequest.Result.Success)
+                SetStatus("修改失败：网络错误 " + req.error, true);
+            else
+                SetStatus("修改失败：HTTP " + req.responseCode, true);
+        }
+
+        m_ChangingPassword = false;
     }
 
     void ApplyTaskUi()
@@ -1372,8 +1635,10 @@ public sealed class InspectARApp : MonoBehaviour
 
     void RefreshTopBar()
     {
-        if (m_UserNameText != null)
-            m_UserNameText.text = LoadUserName();
+        if (m_UserChipLabel != null)
+            m_UserChipLabel.text = DisplayUserName();
+        if (m_UserChipButton != null)
+            m_UserChipButton.gameObject.SetActive(m_Auth.HasToken);
         if (m_TaskStateText == null)
             return;
         if (!m_Task.Active)
@@ -1394,7 +1659,7 @@ public sealed class InspectARApp : MonoBehaviour
         m_MarkerToggleLabel.text = n > 0 ? "标记 " + n : "标记";
     }
 
-    static string LoadUserName()
+    static string DisplayUserName()
     {
         var name = PlayerPrefs.GetString(PlayerPrefsUserNameKey, "");
         if (!string.IsNullOrEmpty(name))
@@ -1902,15 +2167,13 @@ public sealed class InspectARApp : MonoBehaviour
                 }
                 else
                 {
-                    PlayerPrefs.SetString(PlayerPrefsJwtKey, body.token);
-                    if (body.user != null)
-                    {
-                        PlayerPrefs.SetString(PlayerPrefsUserIdKey, body.user.id ?? "");
-                        PlayerPrefs.SetString(PlayerPrefsRoleKey, body.user.role ?? "");
-                        PlayerPrefs.SetString(PlayerPrefsUserNameKey, body.user.username ?? "");
-                    }
-
-                    PlayerPrefs.Save();
+                    m_Auth.SaveLogin(
+                        body.token,
+                        body.user != null ? body.user.id : "",
+                        body.user != null ? body.user.username : "",
+                        body.user != null ? body.user.role : "");
+                    if (m_PassField != null)
+                        m_PassField.text = "";
                     ApplySessionUi();
                     SetStatus("登录成功。点「新建任务」开始。", false);
                 }
@@ -2023,18 +2286,14 @@ public sealed class InspectARApp : MonoBehaviour
 
     public void AttachAuth(UnityWebRequest req)
     {
-        var jwt = LoadJwt();
-        if (!string.IsNullOrEmpty(jwt))
-            req.SetRequestHeader("Authorization", "Bearer " + jwt);
+        m_Auth.AttachAuth(req);
     }
 
     void HandleUnauthorized()
     {
-        PlayerPrefs.DeleteKey(PlayerPrefsJwtKey);
-        PlayerPrefs.DeleteKey(PlayerPrefsUserIdKey);
-        PlayerPrefs.DeleteKey(PlayerPrefsRoleKey);
-        PlayerPrefs.DeleteKey(PlayerPrefsUserNameKey);
-        PlayerPrefs.Save();
+        m_Auth.Clear();
+        SetUserMenuOpen(false);
+        ShowPasswordOverlay(false);
         if (m_History != null)
             m_History.Hide();
         ApplySessionUi();
@@ -2043,12 +2302,7 @@ public sealed class InspectARApp : MonoBehaviour
 
     public static bool HasJwt()
     {
-        return !string.IsNullOrEmpty(LoadJwt());
-    }
-
-    static string LoadJwt()
-    {
-        return PlayerPrefs.GetString(PlayerPrefsJwtKey, "");
+        return !string.IsNullOrEmpty(PlayerPrefs.GetString(PlayerPrefsJwtKey, ""));
     }
 
     void SaveBackendUrl()
@@ -2113,7 +2367,6 @@ public sealed class InspectARApp : MonoBehaviour
         }
 
         m_Toast.SetActive(true);
-        m_Toast.transform.SetAsLastSibling();
         if (m_ConfirmPanel != null && m_ConfirmPanel.activeSelf)
             m_ConfirmPanel.transform.SetAsLastSibling();
         var history = m_Toast.transform.parent != null ? m_Toast.transform.parent.Find("HistoryOverlay") : null;
@@ -2121,6 +2374,9 @@ public sealed class InspectARApp : MonoBehaviour
             history.SetAsLastSibling();
         if (m_LoginPanel != null && m_LoginPanel.activeSelf)
             m_LoginPanel.transform.SetAsLastSibling();
+        if (m_PasswordPanel != null && m_PasswordPanel.activeSelf)
+            m_PasswordPanel.transform.SetAsLastSibling();
+        m_Toast.transform.SetAsLastSibling();
         if (m_ToastGroup != null)
             m_ToastGroup.alpha = 1f;
         if (m_ToastImage != null)
@@ -2201,7 +2457,7 @@ public sealed class InspectARApp : MonoBehaviour
                 var n = t.name;
                 if (n == "TopBar" || n == "BottomBar" || n == "Toast")
                     break;
-                if (n == "MarkerDrawer" || n == "HistoryOverlay" || n == "LoginOverlay" || n == "SubmitConfirm")
+                if (n == "MarkerDrawer" || n == "HistoryOverlay" || n == "LoginOverlay" || n == "SubmitConfirm" || n == "UserMenu" || n == "PasswordOverlay")
                     return true;
                 t = t.parent;
             }

@@ -308,6 +308,32 @@
 - 采用（打回 1/4 已过）
 - 过滤、点云、临时平面已落地。`ARCoreSettings.asset` YAML 仍 Depth Required，作残留。已同步 inspect-ar。未改业务代码。真机仍待出包。
 
+## P-027
+
+- 目标：Phase 10 分配 Unity 完整登录会话（切换/退出/改密/过期）
+
+### Prompt 原文
+
+> 手机端目前没有登录登出功能，首次进入后只能一直使用默认账号无法切换……完整实现用户登录系统……修改密码……Token 过期跳转登录
+
+### 结果
+
+- 采用（仅文档）
+- 斥候：已有登录面板与 JWT，缺退出入口、用户名不可点、用户名写死 inspector、无改密 API。已写 FIX-PLAN 卡点 Q/R、API `POST /api/auth/password`。本窗口未改 backend/admin/mobile。
+
+## P-028
+
+- 目标：查收 M5/M6 Phase10
+
+### Prompt 原文
+
+> 所有窗口已完成请查收
+
+### 结果
+
+- 采用
+- M5 改密接口 curl 矩阵通过，inspector 已改回 inspect123。M6 登录卡/用户菜单/退出/改密/过期均在 `mobile/`。已同步 inspect-ar。未改业务代码。
+
 
 
 

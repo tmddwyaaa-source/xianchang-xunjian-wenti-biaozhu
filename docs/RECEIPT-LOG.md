@@ -426,4 +426,37 @@ M1 未代替改 `mobile/`，未同步 inspect-ar。
 **结论**：`done`（打回 1/4 已过，未再打回）  
 M1 未改 `mobile/` 业务，只同步出包目录。
 
+## 2026-08-29 查收 — M5 Phase10（改密）
+
+| 检查项 | 结果 |
+|--------|------|
+| `POST /api/auth/password` + `requireAuth` | ✅ `api.go` |
+| `GetUserByID` / `UpdatePassword` 不重建表 | ✅ `users.go` |
+| 无 Token | ✅ 401 `unauthorized` |
+| 旧密码错 | ✅ 400 `invalid old password`（不是 401） |
+| 新密码过短 / 与旧相同 | ✅ 400 `password too short` / `password unchanged` |
+| 改密成功 200 `{ok:true}` 后新密码可登录 | ✅ 再改回 `inspect123` |
+| 未改 admin/mobile | ✅ |
+
+**结论**：`done`  
+M1 未改 `backend/` 业务。
+
+## 2026-08-29 查收 — M6 Phase10（登录会话）
+
+| 检查项 | 结果 |
+|--------|------|
+| `InspectAuthSession` 存取/Clear/AttachAuth/`exp` | ✅ 新脚本 |
+| Start 过期 Toast；禁止静默 inspector 登录 | ✅ |
+| 登录卡居中 sizeDelta 640×760，遮罩 a=0.18 | ✅ 横屏 720×560 |
+| 用户名不写死 inspector；密码每次清空 | ✅ |
+| 右上角 UserChip Button + 下拉改密/退出 | ✅ |
+| 退出清 Token 回登录卡 | ✅ `OnLogoutClicked` |
+| 改密 POST `/api/auth/password`；400 不登出；401 登出 | ✅ |
+| 扫描/锚点/点云/临时平面/ColorTint | ✅ 保留 |
+| 同步 inspect-ar | ✅ |
+| 真机 | ❌ 待 Build And Run |
+
+**结论**：`done`  
+M1 未改 `mobile/` 业务，只同步出包目录。
+
 

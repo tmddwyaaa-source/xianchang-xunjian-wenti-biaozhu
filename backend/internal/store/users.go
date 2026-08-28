@@ -62,7 +62,29 @@ func (s *Store) SeedUsersIfEmpty() error {
 }
 
 func (s *Store) GetUserByUsername(username string) (*User, error) {
-	row := s.db.QueryRow(`SELECT id, username, password, role FROM users WHERE username = ?`, username)
+	return s.scanUser(s.db.QueryRow(`SELECT id, username, password, role FROM users WHERE username = ?`, username))
+}
+
+func (s *Store) GetUserByID(id string) (*User, error) {
+	return s.scanUser(s.db.QueryRow(`SELECT id, username, password, role FROM users WHERE id = ?`, id))
+}
+
+func (s *Store) UpdatePassword(id, hash string) error {
+	res, err := s.db.Exec(`UPDATE users SET password = ? WHERE id = ?`, hash, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) scanUser(row *sql.Row) (*User, error) {
 	var u User
 	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -67,7 +67,7 @@ set LISTEN_ADDR=0.0.0.0:8081
 
 ## 已完成 / 未完成 / 已知问题
 
-- **已完成**：工具链；M3 骨架；M5 API+SQLite+登录权限+PUT+WS；M4 列表登录筛选+三行坐标+WS；M6 AR（扫描、多标记、布局、锁地、关键词 High、世界锚、点云、临时平面兜底）。
-- **进行中**：真机用 `inspect-ar` 重新 Build And Run，在白墙白地验证点云数量与点击即放。
+- **已完成**：工具链；M3 骨架；M5 API+SQLite+登录权限+PUT+WS；M4 列表登录筛选+三行坐标+WS；M6 AR（扫描、多标记、布局、锁地、关键词 High、世界锚、点云、临时平面兜底）。仓库 https://github.com/tmddwyaaa-source/xianchang-xunjian-wenti-biaozhu
+- **进行中**：真机用 `inspect-ar` 重新 Build And Run，验证登录/退出/换账号/改密。
 - **未完成**：真机演示视频、电脑端演示视频、对外分享仓库/网盘。
 - **已知问题**：Hub 附带 Visual Studio Community 安装失败（本机已有 VS 2026）；曾因占用改用 8081，**现已切回 8080**。

@@ -139,6 +139,26 @@ Body：`{ "username": "inspector", "password": "inspect123" }`
 用户名/密码错误 → **401** `{ "error": "invalid credentials" }`。  
 缺字段 → **400**。
 
+### `POST /api/auth/password`（已登录，改自己的密码）
+
+Phase 10。必须 `Authorization: Bearer <jwt>`。  
+Body：
+
+```json
+{ "oldPassword": "inspect123", "newPassword": "inspect456" }
+```
+
+| 规则 | |
+|------|--|
+| 无 Token / Token 无效过期 | **401** `{ "error": "unauthorized" }` |
+| 缺字段或空 | **400** |
+| 新密码长度 &lt; 6 | **400** `{ "error": "password too short" }` |
+| 新密码与旧密码相同 | **400** `{ "error": "password unchanged" }` |
+| 旧密码不对 | **400** `{ "error": "invalid old password" }`（不要 401） |
+| 成功 | **200** `{ "ok": true }`，bcrypt 覆盖库中密码；当前 JWT 仍有效 |
+
+只能改 Token 对应的用户。不要提供改别人密码的接口。
+
 ### `GET /api/issues`（任意已登录角色）
 
 返回 `{ "issues": [ ... ] }`，按 `createdAt` 新的在前。  
@@ -217,7 +237,9 @@ Token 无效/缺失：升级前 **401** JSON `{ "error": "unauthorized" }`（不
 
 工程内可配置（PlayerPrefs），真机填电脑局域网 IP，例如 `http://192.168.2.14:8080`。
 
-登录成功后把 `token` 存 PlayerPrefs（键名 `inspect.jwt`）。之后 `POST/GET/PUT /api/issues` 必须带 `Authorization: Bearer …`。401 时清 Token 并回到登录面板。
+登录成功后把 `token` 存 PlayerPrefs（键名 `inspect.jwt`），用户信息键 `inspect.userId` / `inspect.username` / `inspect.role`。之后所有 `/api/*`（含 `POST /api/auth/password`、`GET/POST/PUT /api/issues`）必须带 `Authorization: Bearer …`。  
+401 或本地读到 JWT `exp` 已过：清上述键（保留 `inspect.backendBaseUrl`），回到登录面板，并提示「登录已过期，请重新登录。」  
+退出登录：同样清 Token 键并回到登录面板。用户名输入框不要写死 `inspector`。
 
 标记颜色（业务色，UI 面板不使用这些纯色）：
 

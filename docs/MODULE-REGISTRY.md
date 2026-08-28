@@ -3,7 +3,7 @@
 > **主导窗口 M1** 维护。状态：`pending` | `in_progress` | `review` | `done` | `blocked`  
 > 环内：斥候 → 主力 → 搜剿；同一卡点最多 4 次。**只有 M1 能标 done。**  
 > 子窗口禁止打开游戏 / 禁止另开浏览器测管理端。  
-> Phase 9 已查收：低纹理过滤 + 点云 + 临时平面。见 `docs/FIX-PLAN.md` 卡点 P。本机 Go **8080**。
+> Phase 10 已查收：改密 API + Unity 登录会话。见 `docs/FIX-PLAN.md` 卡点 Q/R。本机 Go **8080**。
 
 ## 总览
 
@@ -11,10 +11,10 @@
 |------|--------|----------|------|------|
 | M1 | 主导 / 架构协调 | **本窗口** | in_progress | — |
 | M3 | 三端骨架 | 窗口 3 | done | M1 |
-| M5 | Go 后端 | 窗口 5 | done | Phase5 卡点 H |
+| M5 | Go 后端 | 窗口 5 | done | Phase10 卡点 Q |
 | M4 | React 管理端 | 窗口 4 | done | Phase5 卡点 I |
-| M6 | Unity AR | 窗口 6 | done | Phase9 卡点 P |
-| M8 | 集成查收 | **M1** | in_progress | Phase9 已同步 inspect-ar；真机待 Build And Run |
+| M6 | Unity AR | 窗口 6 | done | Phase10 卡点 R |
+| M8 | 集成查收 | **M1** | in_progress | Phase10 已同步 inspect-ar；真机待 Build And Run |
 
 ## 目录边界
 
@@ -88,13 +88,20 @@ docs/        仅 M1（含查收）
 - [x] PUT/PATCH → `issue.updated`；DELETE → `issue.deleted`
 - [x] 两次不同 xyz 的 POST，GET 互不覆盖
 
-允许本环超过 5 个文件（ws 子系统）。
+**交付物（Phase 10，本环）**：
+- [x] `POST /api/auth/password`：Bearer 必填；Body `oldPassword`/`newPassword`
+- [x] 旧密码错 → 400 `invalid old password`（禁止 401）
+- [x] 新密码 &lt;6 / 与旧相同 → 400；成功 200 `{ "ok": true }`，JWT 仍有效
+- [x] `GetUserByID` + `UpdatePassword`；不重建 users 表
+- [x] curl 自测后 **inspector 改回 inspect123**
 
-**验收**（须贴真实 curl/WS）：见 `docs/FIX-PLAN.md` 卡点 H。打 **8080**。
+允许本环文件：`internal/api/api.go`、`internal/store/users.go`（可加小测试）。不要改 `admin/`、`mobile/`。
 
-**环内角色**：斥候 → 主力 → 搜剿；建议两环（PUT/坐标 → WebSocket）。
+**验收**：见 `docs/FIX-PLAN.md` 卡点 Q。打 **8080**。
 
-**开工话术**：见 `docs/FIX-PLAN.md` Phase 5「M5 — Phase5」
+**环内角色**：斥候 → 主力 → 搜剿；一环即可。
+
+**开工话术**：见 `docs/FIX-PLAN.md` Phase 10「M5 — 改密接口」
 
 **状态**：`done`
 
@@ -199,9 +206,18 @@ docs/        仅 M1（含查收）
 - [x] 四种射线都失败时点击仍放置：1.5m 临时水平蓝网格 + TryAddAnchorAsync
 - [x] 不要自动 ARSession.Reset
 
-**验收**：代码对照卡点 P 已过（打回 1/4 后复验）。禁止打开游戏 / 出包。真机仍待 inspect-ar Build And Run。
+**交付物（Phase 10，本环）**：
+- [x] `InspectAuthSession`：jwt 存取、`AttachAuth`、`Clear`（保留 URL）、读 JWT `exp`
+- [x] 启动不自动登录；无 Token / 过期 / 401 → 登录卡 +「登录已过期，请重新登录。」
+- [x] 登录卡居中、半透明（遮罩 a≈0.18，卡 a≤0.50），可见摄像头；用户名不写死 inspector
+- [x] 顶栏右上角小尺寸用户芯片（Button）；点开下拉：修改密码、退出登录
+- [x] 退出：清 Token，回登录卡，可换账号
+- [x] 改密弹层：`POST /api/auth/password`；错旧密码不登出；401 才登出
+- [x] 登录后所有 `/api/*` 带 Bearer；保留扫描/锚点/点云/临时平面/ColorTint
 
-**开工话术**：见 `docs/FIX-PLAN.md` Phase 9
+**验收**：代码对照卡点 R。禁止打开游戏 / 出包。
+
+**开工话术**：见 `docs/FIX-PLAN.md` Phase 10「M6 — Unity 登录会话」
 
 **状态**：`done`
 
@@ -213,16 +229,16 @@ docs/        仅 M1（含查收）
 
 **验收**：登录 → 手机多点任务确认发送（带 Token，每点独立 xyz）→ React 无需手动刷新即出现新问题 → 详情三行坐标 → 历史 PUT / admin 改状态。端口 **8080** + 5174。
 
-**状态**：`in_progress`（Phase9 源码已同步 inspect-ar；真机待出包）
+**状态**：`in_progress`（Phase10 源码已同步 inspect-ar；真机待出包）
 
 ---
 
-## 子窗口开工话术（Phase 9，复制到新 Cursor 窗口）
+## 子窗口开工话术（Phase 10，复制到新 Cursor 窗口）
 
 工作区路径：`D:\Cursor_projectt\测试考题`
 
-完整话术以 **`docs/FIX-PLAN.md` Phase 9** 为准。本环只开 **M6**。
+完整话术以 **`docs/FIX-PLAN.md` Phase 10** 为准。本环开 **M5** 与 **M6**（可同时）。
 
-完工说：`M6 已完成，请主导窗口查收。`
+完工说：`M5 已完成，请主导窗口查收。` 或 `M6 已完成，请主导窗口查收。`
 
 

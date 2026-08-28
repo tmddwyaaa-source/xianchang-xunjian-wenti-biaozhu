@@ -50,6 +50,7 @@ func New(st *store.Store, tokens *auth.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", h.health)
 	mux.HandleFunc("POST /api/auth/login", h.login)
+	mux.HandleFunc("POST /api/auth/password", h.requireAuth(h.changePassword))
 	mux.HandleFunc("GET /ws", h.serveWS)
 	mux.HandleFunc("POST /api/issues", h.requireAuth(h.createIssue))
 	mux.HandleFunc("GET /api/issues", h.requireAuth(h.listIssues))
@@ -161,6 +162,65 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 			Role:     user.Role,
 		},
 	})
+}
+
+type changePasswordBody struct {
+	OldPassword *string `json:"oldPassword"`
+	NewPassword *string `json:"newPassword"`
+}
+
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	var body changePasswordBody
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	oldPassword := ""
+	if body.OldPassword != nil {
+		oldPassword = *body.OldPassword
+	}
+	newPassword := ""
+	if body.NewPassword != nil {
+		newPassword = *body.NewPassword
+	}
+	if oldPassword == "" {
+		writeError(w, http.StatusBadRequest, "oldPassword is required")
+		return
+	}
+	if strings.TrimSpace(newPassword) == "" {
+		writeError(w, http.StatusBadRequest, "newPassword is required")
+		return
+	}
+	newPassword = strings.TrimSpace(newPassword)
+	if len(newPassword) < 6 {
+		writeError(w, http.StatusBadRequest, "password too short")
+		return
+	}
+	if newPassword == oldPassword {
+		writeError(w, http.StatusBadRequest, "password unchanged")
+		return
+	}
+
+	c := claimsOf(r)
+	user, err := h.store.GetUserByID(c.Subject)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if !auth.CheckPassword(user.PasswordHash, oldPassword) {
+		writeError(w, http.StatusBadRequest, "invalid old password")
+		return
+	}
+	hash, err := auth.HashPassword(newPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if err := h.store.UpdatePassword(user.ID, hash); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 type createBody struct {
